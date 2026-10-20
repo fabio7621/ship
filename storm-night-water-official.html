@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>暴風雨之夜 — 官方 Water 改造版</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #04070e; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { Water } from 'three/addons/objects/Water.js';
+
+/* =========================================================
+   波參數(一份參數,GPU/CPU 共用)
+   ========================================================= */
+const STORM = 1.0;
+const TAU = Math.PI * 2;
+const WAVES = [
+  { dir: [-1.0,  0.18], len: 46,  amp: 2.0 * STORM, q: 0.30 },
+  { dir: [-1.0, -0.32], len: 25,  amp: 1.1 * STORM, q: 0.38 },
+  { dir: [-0.85, 0.50], len: 14,  amp: 0.5 * STORM, q: 0.42 },
+  { dir: [-1.0,  0.08], len: 7.5, amp: 0.24 * STORM, q: 0.32 }
+].map(w => {
+  const m = Math.hypot(w.dir[0], w.dir[1]);
+  const k = TAU / w.len;
+  return { dx: w.dir[0]/m, dz: w.dir[1]/m, k, om: Math.sqrt(9.8*k), A: w.amp, q: w.q };
+});
+
+function buildGerstnerGLSL() {
+  let body = '';
+  for (const w of WAVES) body += `
+    { vec2 D = vec2(${w.dx.toFixed(5)}, ${w.dz.toFixed(5)});
+      float k = ${w.k.toFixed(5)}, om = ${w.om.toFixed(5)}, A = ${w.A.toFixed(5)}, Q = ${w.q.toFixed(3)};
+      float f = k * dot(D, p) - om * t;
+      float C = cos(f), S = sin(f);
+      d.x += Q*A*D.x*C; d.z += Q*A*D.y*C; d.y += A*S;
+      crest += A*S; ampSum += A; }`;
+  return `
+  vec3 gerstner(vec2 p, float t, out float crestN) {
+    vec3 d = vec3(0.0); float crest = 0.0, ampSum = 0.0;
+    ${body}
+    crestN = ampSum > 0.0 ? crest / ampSum : 0.0;
+    return d;
+  }`;
+}
+
+// CPU 端高度取樣(注意:平面被旋轉,波空間的 z = -世界 z)
+function seaHeightWorld(x, z, t) {
+  let y = 0;
+  const wz = -z;
+  for (const w of WAVES) y += w.A * Math.sin(w.k * (w.dx*x + w.dz*wz) - w.om*t);
+  return y;
+}
+
+/* =========================================================
+   場景基礎
+   ========================================================= */
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const SKY = new THREE.Color(0x05080f);
+const SKY_FLASH = new THREE.Color(0x36436a);
+scene.background = SKY.clone();
+scene.fog = new THREE.FogExp2(0x070c16, 0.011);
+
+const camera = new THREE.PerspectiveCamera(52, innerWidth/innerHeight, 0.1, 500);
+
+const moonLight = new THREE.DirectionalLight(0x7e93b8, 0.55);
+moonLight.position.set(-30, 42, -38);
+scene.add(moonLight);
+scene.add(new THREE.AmbientLight(0x1c2740, 0.6));
+const boltLight = new THREE.DirectionalLight(0xbcd0ff, 0);
+boltLight.position.set(10, 50, -20);
+scene.add(boltLight);
+
+// 月亮光暈
+{
+  const c = document.createElement('canvas'); c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const rg = g.createRadialGradient(128,128,8,128,128,128);
+  rg.addColorStop(0,'rgba(205,218,238,0.85)');
+  rg.addColorStop(0.25,'rgba(150,170,205,0.28)');
+  rg.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle = rg; g.fillRect(0,0,256,256);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(c), transparent: true, opacity: 0.5,
+    depthWrite: false, blending: THREE.AdditiveBlending, fog: false
+  }));
+  sp.position.set(-55, 38, -110); sp.scale.setScalar(60);
+  scene.add(sp);
+}
+
+/* =========================================================
+   海面:官方 Water(即時反射)+ 注入 Gerstner 位移與白沫
+   ========================================================= */
+const uTime = { value: 0 };
+const SUN_BASE = new THREE.Color(0x2a3550);
+const water = new Water(
+  new THREE.PlaneGeometry(340, 220, 256, 160),
+  {
+    textureWidth: 512,
+    textureHeight: 512,
+    waterNormals: new THREE.TextureLoader().load(
+      'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/textures/waternormals.jpg',
+      t => { t.wrapS = t.wrapT = THREE.RepeatWrapping; }
+    ),
+    sunDirection: new THREE.Vector3(-0.4, 0.6, -0.5).normalize(),
+    sunColor: SUN_BASE.getHex(),
+    waterColor: 0x000d14,
+    distortionScale: 6.0,   // 暴風雨:反射扭曲加大
+    fog: true
+  }
+);
+water.rotation.x = -Math.PI / 2;
+scene.add(water);
+
+// 把 Gerstner 注入官方 Water 的 shader(社群驗證過的改造手法)
+water.material.onBeforeCompile = (shader) => {
+  shader.uniforms.uTime = uTime;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `#include <common>
+      uniform float uTime;
+      varying float vCrest;
+      ${buildGerstnerGLSL()}`)
+    .replace('void main() {', `void main() {
+      float cV;
+      vec3 gd = gerstner(position.xy, uTime, cV);
+      vec3 dPos = position + vec3(gd.x, gd.z, gd.y); // 平面局部:xy 水平、z 朝上
+      vCrest = cV;`)
+    .replaceAll('vec4( position, 1.0 )', 'vec4( dPos, 1.0 )');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>
+      varying float vCrest;`)
+    .replace('gl_FragColor = vec4( outgoingLight, alpha );', `
+      float foam = smoothstep(0.55, 0.95, vCrest);
+      outgoingLight = mix(outgoingLight, vec3(0.48, 0.56, 0.64), foam * 0.8);
+      gl_FragColor = vec4( outgoingLight, alpha );`);
+};
+
+/* =========================================================
+   北歐漁船(發光的窗戶會真實地倒映在水面上)
+   ========================================================= */
+const boat = new THREE.Group();
+scene.add(boat);
+const darkWood = new THREE.MeshStandardMaterial({ color: 0x241a12, roughness: 0.82, flatShading: true });
+const darkerWood = new THREE.MeshStandardMaterial({ color: 0x16100a, roughness: 0.9, flatShading: true });
+const hullPaint = new THREE.MeshStandardMaterial({ color: 0x301812, roughness: 0.7, flatShading: true });
+const windowMat = new THREE.MeshBasicMaterial({ color: 0xffc06a, fog: false });
+
+{ // 船體(硬鏈折角輪廓,取代圓弧,線條更俐落)
+  const s = new THREE.Shape();
+  s.moveTo(-4.6, 1.1);
+  s.lineTo(-5.3, 0.55);
+  s.lineTo(-5.3, -0.55);
+  s.lineTo(-4.6, -1.1);
+  s.lineTo(0.2, -1.75);
+  s.lineTo(3.2, -1.45);
+  s.lineTo(5.6, -0.55);
+  s.lineTo(6.3, 0);
+  s.lineTo(5.6, 0.55);
+  s.lineTo(3.2, 1.45);
+  s.lineTo(0.2, 1.75);
+  s.closePath();
+  const geo = new THREE.ExtrudeGeometry(s, {
+    depth: 1.7, bevelEnabled: true, bevelThickness: 0.16,
+    bevelSize: 0.12, bevelSegments: 1, steps: 1, curveSegments: 1
+  });
+  geo.rotateX(Math.PI / 2);
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    if (y < -0.1) pos.setZ(i, z * Math.max(0.22, 1 + y * 0.30));
+    if (y > -0.3) {
+      if (x > 2.2) pos.setY(i, y + (x - 2.2) * 0.30);
+      if (x < -3.8) pos.setY(i, y + (-3.8 - x) * 0.16);
+    }
+  }
+  geo.computeVertexNormals();
+  const hull = new THREE.Mesh(geo, hullPaint);
+  hull.position.y = 0.55;
+  boat.add(hull);
+}
+{ // 甲板
+  const s = new THREE.Shape();
+  s.moveTo(-4.3, 0.95);
+  s.lineTo(-4.9, 0.5);
+  s.lineTo(-4.9, -0.5);
+  s.lineTo(-4.3, -0.95);
+  s.lineTo(0.2, -1.5);
+  s.lineTo(3.0, -1.25);
+  s.lineTo(5.2, -0.5);
+  s.lineTo(5.8, 0);
+  s.lineTo(5.2, 0.5);
+  s.lineTo(3.0, 1.25);
+  s.lineTo(0.2, 1.5);
+  s.closePath();
+  const deck = new THREE.Mesh(new THREE.ShapeGeometry(s, 1), darkWood);
+  deck.rotateX(-Math.PI / 2);
+  deck.position.y = 0.62;
+  boat.add(deck);
+}
+{ // 駕駛艙 + 窗戶
+  const house = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.85, 2.1), darkWood);
+  house.position.set(-2.5, 1.6, 0); boat.add(house);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.18, 2.4), darkerWood);
+  roof.position.set(-2.5, 2.6, 0); boat.add(roof);
+  const stack = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.9, 10), darkerWood);
+  stack.position.set(-3.3, 3.0, -0.5); boat.add(stack);
+  const front = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.6), windowMat);
+  front.position.set(-1.24, 1.95, 0); front.rotateY(Math.PI / 2); boat.add(front);
+  for (const side of [-1, 1]) for (const off of [-0.55, 0.35]) {
+    const w = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.5), windowMat);
+    w.position.set(-2.5 + off, 1.9, side * 1.06);
+    if (side < 0) w.rotateY(Math.PI);
+    boat.add(w);
+  }
+}
+const cabinLight = new THREE.PointLight(0xffa45c, 18, 38, 2);
+cabinLight.position.set(-1.4, 2.0, 0);
+boat.add(cabinLight);
+{ // 桅杆、支索、燈
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.09, 5.4, 8), darkerWood);
+  mast.position.set(1.4, 3.2, 0); mast.rotation.z = 0.06; boat.add(mast);
+  const stays = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(1.25, 5.8, 0), new THREE.Vector3(5.5, 1.6, 0),
+    new THREE.Vector3(1.3, 5.4, 0), new THREE.Vector3(-2.5, 2.7, 0)
+  ]);
+  boat.add(new THREE.LineSegments(stays, new THREE.LineBasicMaterial({ color: 0x2a241c })));
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xfff2cf, fog: false }));
+  lamp.position.set(1.25, 5.95, 0); boat.add(lamp);
+  const lampLight = new THREE.PointLight(0xfff0c8, 4, 16, 2);
+  lampLight.position.copy(lamp.position); boat.add(lampLight);
+  const nav = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 8),
+    new THREE.MeshBasicMaterial({ color: 0xff3b30, fog: false }));
+  nav.position.set(-1.3, 2.45, 1.15); boat.add(nav);
+}
+
+/* =========================================================
+   浮力:四點取樣 + 彈簧阻尼
+   ========================================================= */
+const phys = {
+  heave: { v: 0, x: 0 }, pitch: { v: 0, x: 0 }, roll: { v: 0, x: 0 },
+  halfL: 3.6, halfW: 1.5, draft: 0.55,
+  stiff: 0.05, dampY: 0.90, dampR: 0.86
+};
+let slamT = 0;
+const sprayBursts = [];
+
+function spring(s, target, k, d, dt) {
+  const kk = k * dt * 60, dd = Math.pow(d, dt * 60);
+  s.v += (target - s.x) * kk; s.v *= dd; s.x += s.v * dt * 60;
+}
+
+function updateBoat(t, dt) {
+  const bx = boat.position.x, bz = boat.position.z;
+  const hB = seaHeightWorld(bx + phys.halfL, bz, t);
+  const hS = seaHeightWorld(bx - phys.halfL, bz, t);
+  const hP = seaHeightWorld(bx, bz + phys.halfW, t);
+  const hQ = seaHeightWorld(bx, bz - phys.halfW, t);
+  const targetY = (hB + hS + hP + hQ) / 4 - phys.draft + 0.7;
+  spring(phys.heave, targetY, phys.stiff, phys.dampY, dt);
+  spring(phys.pitch, Math.atan2(hB - hS, phys.halfL * 2) * 0.85, phys.stiff, phys.dampR, dt);
+  spring(phys.roll,  Math.atan2(hQ - hP, phys.halfW * 2) * 0.7,  phys.stiff, phys.dampR, dt);
+  boat.position.y = phys.heave.x;
+  boat.rotation.z = phys.pitch.x;
+  boat.rotation.x = phys.roll.x;
+  if (targetY - phys.heave.x > 1.0 && t - slamT > 0.25) { slamT = t; spawnSpray(); }
+}
+
+/* 浪花粒子 */
+const SPRAY_N = 400;
+const sprayPos = new Float32Array(SPRAY_N * 3).fill(-999);
+const sprayVel = new Float32Array(SPRAY_N * 3);
+const sprayLife = new Float32Array(SPRAY_N);
+const sprayGeo = new THREE.BufferGeometry();
+sprayGeo.setAttribute('position', new THREE.BufferAttribute(sprayPos, 3));
+let sprayIdx = 0;
+scene.add(new THREE.Points(sprayGeo, new THREE.PointsMaterial({
+  color: 0xc6d8e8, size: 0.16, transparent: true, opacity: 0.75,
+  depthWrite: false, blending: THREE.AdditiveBlending
+})));
+const _bow = new THREE.Vector3();
+function spawnSpray() {
+  boat.localToWorld(_bow.set(5.4, 0.7, 0));
+  for (let i = 0; i < 26; i++) {
+    const j = sprayIdx = (sprayIdx + 1) % SPRAY_N;
+    sprayPos[j*3] = _bow.x + (Math.random()-0.5)*0.8;
+    sprayPos[j*3+1] = _bow.y + Math.random()*0.4;
+    sprayPos[j*3+2] = _bow.z + (Math.random()-0.5)*1.6;
+    sprayVel[j*3] = 1.5 + Math.random()*3.5;
+    sprayVel[j*3+1] = 2.5 + Math.random()*4.0;
+    sprayVel[j*3+2] = (Math.random()-0.5)*3.0;
+    sprayLife[j] = 0.9 + Math.random()*0.5;
+  }
+}
+function updateSpray(dt) {
+  for (let j = 0; j < SPRAY_N; j++) {
+    if (sprayLife[j] <= 0) continue;
+    sprayLife[j] -= dt;
+    sprayVel[j*3+1] -= 9.8 * dt;
+    sprayPos[j*3] += sprayVel[j*3]*dt;
+    sprayPos[j*3+1] += sprayVel[j*3+1]*dt;
+    sprayPos[j*3+2] += sprayVel[j*3+2]*dt;
+    if (sprayLife[j] <= 0) sprayPos[j*3+1] = -999;
+  }
+  sprayGeo.attributes.position.needsUpdate = true;
+}
+
+/* 雨 */
+const RAIN_N = 600, WIND_X = -7;
+const rainPos = new Float32Array(RAIN_N * 6);
+const rainSp = new Float32Array(RAIN_N);
+for (let i = 0; i < RAIN_N; i++) {
+  rainPos[i*6] = (Math.random()-0.5)*110;
+  rainPos[i*6+1] = Math.random()*42;
+  rainPos[i*6+2] = (Math.random()-0.5)*70;
+  rainSp[i] = 26 + Math.random()*16;
+}
+const rainGeo = new THREE.BufferGeometry();
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+scene.add(new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
+  color: 0x9db4cf, transparent: true, opacity: 0.28, depthWrite: false
+})));
+function updateRain(dt) {
+  for (let i = 0; i < RAIN_N; i++) {
+    let x = rainPos[i*6], y = rainPos[i*6+1], z = rainPos[i*6+2];
+    y -= rainSp[i]*dt; x += WIND_X*dt;
+    if (y < -2) { y = 36 + Math.random()*8; x = (Math.random()-0.5)*110 + 20; z = (Math.random()-0.5)*70; }
+    rainPos[i*6] = x; rainPos[i*6+1] = y; rainPos[i*6+2] = z;
+    rainPos[i*6+3] = x + WIND_X/rainSp[i]*1.4; rainPos[i*6+4] = y + 1.4; rainPos[i*6+5] = z;
+  }
+  rainGeo.attributes.position.needsUpdate = true;
+}
+
+/* 閃電 */
+let flash = 0, nextBolt = 3;
+const boltGeo = new THREE.BufferGeometry();
+const boltMat = new THREE.LineBasicMaterial({
+  color: 0xdfe9ff, transparent: true, opacity: 0,
+  blending: THREE.AdditiveBlending, fog: false
+});
+scene.add(new THREE.Line(boltGeo, boltMat));
+function maybeLightning(t, dt) {
+  flash = Math.max(0, flash - dt * 2.8);
+  if (t > nextBolt) {
+    nextBolt = t + 4 + Math.random() * 7;
+    flash = 0.7 + Math.random() * 0.3;
+    const pts = [];
+    let x = (Math.random()-0.5)*90, z = -35 - Math.random()*30, y = 45;
+    while (y > 0) {
+      pts.push(new THREE.Vector3(x, y, z));
+      y -= 2.5 + Math.random()*4;
+      x += (Math.random()-0.5)*5;
+      z += (Math.random()-0.5)*3;
+    }
+    boltGeo.setFromPoints(pts);
+  }
+  boltLight.intensity = flash * 2.6;
+  boltMat.opacity = Math.max(0, flash - 0.25) * 1.4;
+  scene.background.copy(SKY).lerp(SKY_FLASH, flash);
+  scene.fog.color.setHex(0x070c16).lerp(SKY_FLASH, flash * 0.6);
+  // 閃電同時打亮水面反射的「太陽」顏色
+  water.material.uniforms.sunColor.value.copy(SUN_BASE).lerp(new THREE.Color(0xcfe0ff), flash);
+}
+
+/* 攝影機:側面跟拍 + 手持感 */
+function updateCamera(t) {
+  camera.position.set(
+    6 + Math.sin(t*0.31)*0.8,
+    4.6 + Math.sin(t*0.47)*0.5 + phys.heave.x*0.25,
+    17.5 + Math.sin(t*0.21)*0.6
+  );
+  camera.lookAt(1.5, 1.0 + phys.heave.x*0.5, 0);
+}
+
+/* 主迴圈 */
+const clock = new THREE.Clock();
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  uTime.value = t;
+  water.material.uniforms.time.value += dt * 1.2; // 法線貼圖細波速度
+  updateBoat(t, dt);
+  cabinLight.intensity = 18 * (0.85 + 0.10*Math.sin(t*9.3) + 0.05*Math.sin(t*23.7));
+  updateSpray(dt);
+  updateRain(dt);
+  maybeLightning(t, dt);
+  updateCamera(t);
+  renderer.render(scene, camera);
+}
+frame();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
