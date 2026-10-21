@@ -86,5 +86,5 @@ export function createFlag(scene, { boat, renderer, fogDensity }) {
     droplets.update(dt, cloth, field, flash);
   }
 
-  return { update, setSize: droplets.setSize, cloth, mesh: flag };
+  return { update, setSize: droplets.setSize, cloth, mesh: flag, wind: field };
 }

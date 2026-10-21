@@ -68,7 +68,7 @@ function bindInput({ dom, pointer, hud, pick, actions }) {
  *           dom: HTMLElement, seaHeight: (x: number, z: number, t: number) => number }} opts
  */
 export function createCabinView({ camera, boat, wheelhouse, cabin, dom, seaHeight }) {
-  const state = { mode: 'outside', u: 0, station: 0, from: null, to: null, curves: null, reveal: 0, revealFrom: 1 };
+  const state = { mode: 'outside', u: 0, station: 0, from: null, to: null, curves: null, reveal: 0, revealFrom: 1, inside: 0 };
   const pointer = { x: 0, y: 0, fresh: false };
   const ext = { pos: new THREE.Vector3(), look: new THREE.Vector3() };   // 外部鏡頭(船身座標),每幀更新
   let current = stationPose(0);                                           // 上一幀的鏡頭(船身座標)
@@ -193,6 +193,7 @@ export function createCabinView({ camera, boat, wheelhouse, cabin, dom, seaHeigh
     ext.look.copy(boat.worldToLocal(p.look));
 
     if (state.mode === 'outside') {
+      state.inside = 0;
       current = { pos: ext.pos.clone(), look: ext.look.clone() };
       apply(ext.pos.clone(), ext.look.clone(), 0);
       if (pointer.fresh) {
@@ -208,10 +209,12 @@ export function createCabinView({ camera, boat, wheelhouse, cabin, dom, seaHeigh
     else frame = { pose: stationPose(state.station), inside: 1 };
     const lookAt = lookAround.apply(frame.pose.pos, frame.pose.look, dt);
     current = { pos: frame.pose.pos, look: lookAt.clone() };          // 含轉頭角度:離開/換位置從實際視線出發
+    state.inside = frame.inside;
     apply(frame.pose.pos.clone(), lookAt, frame.inside);
   }
 
-  return { update, get mode() { return state.mode; } };
+  /* inside:0 = 室外、1 = 艙內,過場中連續變化(音效用來決定外面的聲音有多悶) */
+  return { update, get mode() { return state.mode; }, get inside() { return state.inside; } };
 }
 
 function isInside(o, root) {

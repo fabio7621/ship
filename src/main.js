@@ -14,6 +14,7 @@ import { createFloater, updateFloater, bowWaveStrength } from './physics/floater
 import { createCabin } from './scene/cabin/index.js';
 import { createCabinView } from './cabinView.js';
 import { createFlag } from './scene/flag/index.js';
+import { createStormAudio } from './audio/index.js';
 
 /* =========================================================
    場景基礎
@@ -56,6 +57,8 @@ scene.environment = new THREE.PMREMGenerator(renderer).fromScene(envScene, 0.04,
 // 駕駛艙內部:場景其他東西都建好後才建立(它會預先編譯「多一盞艙內燈」版本的 shader)
 const cabin = createCabin({ boat, wheelhouse, rainMaterial: rain.material, scene, renderer, camera });
 const cabinView = createCabinView({ camera, boat, wheelhouse, cabin, dom: renderer.domElement, seaHeight: ocean.heightAt });
+const audio = createStormAudio({ wind: flag.wind });
+lightning.onStrike(audio.strike);
 
 function resize() {
   const dpr = renderer.getPixelRatio();
@@ -91,9 +94,10 @@ function frame() {
   spray.update(dt, t, boat, floater, flash);
   spindrift.update(t, camera, boat, flash);
   rain.update(dt);
+  audio.update(t, { boat, floater, inside: cabinView.inside, listener: camera.position });
   post.render();
 }
 frame();
 
 // 除錯:網址加 ?debug 可在 console 用 __storm.ocean.foamInfo() 看白沫覆蓋率
-if (new URLSearchParams(location.search).has('debug')) window.__storm = { ocean, scene, camera, boat, cabin, cabinView, renderer, flag };
+if (new URLSearchParams(location.search).has('debug')) window.__storm = { ocean, scene, camera, boat, cabin, cabinView, renderer, flag, audio };

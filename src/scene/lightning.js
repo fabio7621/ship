@@ -35,6 +35,7 @@ export function createLightning(scene, boltLight) {
   const state = { flash: 0, dir: new THREE.Vector3(0, 0.5, -1).normalize() };
   let nextBolt = 3;
   let pulses = [];
+  const listeners = [];
 
   const mat = new THREE.LineBasicMaterial({
     color: new THREE.Color(0xdfe9ff).multiplyScalar(4), transparent: true, opacity: 0,
@@ -56,6 +57,8 @@ export function createLightning(scene, boltLight) {
     pulses = [t, t + 0.07 + Math.random() * 0.06, t + 0.2 + Math.random() * 0.15]
       .slice(0, 2 + Math.round(Math.random()));
     nextBolt = t + 5 + Math.random() * 8;
+    const power = 0.7 + 0.15 * (pulses.length - 2) + Math.random() * 0.15;   // 回擊越多次越響
+    listeners.forEach((fn) => fn({ x, y: 30, z, power }));
   }
 
   function update(t, dt) {
@@ -70,7 +73,10 @@ export function createLightning(scene, boltLight) {
     scene.fog.color.copy(FOG_BASE).lerp(FOG_FLASH, state.flash * 0.6);
   }
 
-  return { update, state };
+  /** 落雷事件(雷聲用):fn({ x, y, z, power }) */
+  const onStrike = (fn) => listeners.push(fn);
+
+  return { update, state, onStrike };
 }
 
 export { FOG_BASE };
