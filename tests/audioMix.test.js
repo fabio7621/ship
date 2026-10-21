@@ -27,6 +27,12 @@ test('雷聲:場景裡閃電的距離範圍 → 1.5~4 秒延遲(閃完才聽到�
   }
 });
 
+test('雷聲:再遠的雷也留在一般喇叭放得出來的頻段(截止頻率 ≥ 400 Hz),而且有一點撕裂聲', () => {
+  const far = thunderProfile(110, 1);
+  assert.ok(far.cutoff >= 400, `${far.cutoff}`);
+  assert.ok(far.crack > 0.1, `${far.crack}`);
+});
+
 test('雷聲:power 為 0 時沒有聲音', () => {
   const p = thunderProfile(60, 0);
   assert.equal(p.gain, 0);
@@ -57,6 +63,8 @@ test('艙內混音:越進艙外部越悶、越小聲,艙內聲越大', () => {
   const out = cabinMix(0), mid = cabinMix(0.5), inn = cabinMix(1);
   assert.ok(out.muffle > mid.muffle && mid.muffle > inn.muffle);
   assert.ok(inn.muffle < 1000);
+  // 雷聲在艙內只悶一點:比其他外部聲音亮,但仍比室外悶
+  assert.ok(inn.thunderMuffle > inn.muffle && inn.thunderMuffle < out.thunderMuffle);
   assert.ok(out.outside > inn.outside && inn.outside > 0);
   assert.equal(out.inside, 0);
   assert.equal(inn.inside, 1);

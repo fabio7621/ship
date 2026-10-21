@@ -12,6 +12,7 @@ export const ACOUSTIC_SCALE = 12;
 const NEAR_FULL = 500, NEAR_ZERO = 1500;   // m:近雷特徵(撕裂聲、高頻)從滿到無
 
 const MUFFLE_OPEN = 18000, MUFFLE_CABIN = 650;   // Hz:室外 / 艙內聽到的外部聲音上限
+const THUNDER_CABIN = 1400;                      // Hz:雷聲夠大、低頻穿透艙壁,艙內只悶一點
 
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 
@@ -26,9 +27,9 @@ export function thunderProfile(distance, power) {
   const p = clamp01(power);
   return {
     delay: d / SOUND_SPEED,
-    gain: p * (0.5 + 0.5 * near),
-    crack: p * near * near,
-    cutoff: 240 + 1500 * near,
+    gain: p * (0.6 + 0.4 * near),
+    crack: p * (0.2 + 0.8 * near * near),   // 撕裂聲:遠雷只剩一點,近雷很明顯
+    cutoff: 450 + 2200 * near,               // 遠雷高頻被空氣吸收,但仍要留在一般喇叭放得出來的頻段
     duration: 3.5 + (1 - near) * 3      // 遠雷滾得久:整條閃電路徑的聲音陸續到達
   };
 }
@@ -58,6 +59,7 @@ export function cabinMix(inside) {
   const s = clamp01(inside);
   return {
     muffle: MUFFLE_OPEN * Math.pow(MUFFLE_CABIN / MUFFLE_OPEN, s),
+    thunderMuffle: MUFFLE_OPEN * Math.pow(THUNDER_CABIN / MUFFLE_OPEN, s),
     outside: 1 - 0.4 * s,
     inside: s
   };

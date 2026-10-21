@@ -3,6 +3,9 @@
    每次都建一組短命的節點,播完自己斷開
    ========================================================= */
 
+const THUNDER_LEVEL = 3.2;      // 雷是全場最大的聲音;總線上的壓縮器會順便把風雨壓下去一點
+const THUNDER_TAIL_HZ = 200;    // 尾巴悶到這裡就好,再低一般喇叭就放不出來了
+
 function oneShot(ctx, buffer, when, offset, duration) {
   const src = ctx.createBufferSource();
   src.buffer = buffer;
@@ -40,15 +43,24 @@ export function playThunder(ctx, out, buffers, profile) {
   const t0 = ctx.currentTime + profile.delay;
   const { duration } = profile;
 
-  const rumble = oneShot(ctx, buffers.brown, t0, Math.random() * 10, duration);
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass'; lp.Q.value = 0.5;
-  lp.frequency.setValueAtTime(profile.cutoff, t0);
-  lp.frequency.exponentialRampToValueAtTime(110, t0 + duration);
+  // 滾動的主體:粉紅噪音(中頻夠,筆電喇叭也聽得到)+ 棕噪音打底(耳機 / 重低音才有的重量)
   const g = ctx.createGain();
-  rumbleEnvelope(g.gain, t0, profile.gain * 1.6, duration);
-  rumble.connect(lp).connect(g).connect(out);
-  cleanup(rumble, [rumble, lp, g]);
+  rumbleEnvelope(g.gain, t0, profile.gain * THUNDER_LEVEL, duration);
+  g.connect(out);
+  const roll = oneShot(ctx, buffers.pink, t0, Math.random() * 10, duration);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.Q.value = 0.6;
+  lp.frequency.setValueAtTime(profile.cutoff, t0);
+  lp.frequency.exponentialRampToValueAtTime(THUNDER_TAIL_HZ, t0 + duration);
+  roll.connect(lp).connect(g);
+  const floor = oneShot(ctx, buffers.brown, t0, Math.random() * 10, duration);
+  const floorLp = ctx.createBiquadFilter();
+  floorLp.type = 'lowpass'; floorLp.frequency.value = 320;
+  const floorGain = ctx.createGain();
+  floorGain.gain.value = 0.7;
+  floor.connect(floorLp).connect(floorGain).connect(g);
+  cleanup(roll, [roll, lp]);
+  cleanup(floor, [floor, floorLp, floorGain, g]);
 
   // 很低的轟聲,給雷一點重量(喇叭小也聽得到上面的泛音)
   const boom = ctx.createOscillator();
@@ -68,7 +80,7 @@ export function playThunder(ctx, out, buffers, profile) {
     hp.type = 'highpass'; hp.frequency.value = 1500;
     const cg = ctx.createGain();
     cg.gain.setValueAtTime(0, t0);
-    cg.gain.linearRampToValueAtTime(profile.crack * 0.55, t0 + 0.01);
+    cg.gain.linearRampToValueAtTime(profile.crack * 0.8, t0 + 0.01);
     cg.gain.exponentialRampToValueAtTime(1e-4, t0 + 0.45);
     crack.connect(hp).connect(cg).connect(out);
     cleanup(crack, [crack, hp, cg]);

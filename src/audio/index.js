@@ -2,6 +2,7 @@
    暴風雨音效:全部用 Web Audio 即時合成,不載入音檔
    訊號流:
      外部聲層 → outside → 低通(進艙越悶)→ master
+     雷       → thunder → 低通(艙內只悶一點)→ master
      艙內聲層 → inside(進艙程度)       → master
      master → 壓縮器 → 喇叭
    瀏覽器要求使用者互動後才能出聲:第一次點擊 / 按鍵時才建立 AudioContext
@@ -14,6 +15,7 @@ import { playThunder, playSplash, playHullThud, playCreak } from './events.js';
 import { createSoundToggle } from '../ui/soundToggle.js';
 
 const MASTER = 0.8;
+const AMBIENT_LEVEL = 0.7;                 // 風雨浪壓低 3 dB,留空間給雷聲(雷不受這個影響)
 const FADE_IN = 2.5, FADE_OUT = 0.3;       // s
 const SMOOTH = 0.12;
 const WIND_PROBE = [-3, 5, 0];             // 船身座標:駕駛艙頂上方,聽風的位置
@@ -62,15 +64,26 @@ function buildGraph(ctx) {
   master.gain.value = 0;
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.01; comp.release.value = 0.3;
-  master.connect(comp).connect(ctx.destination);
-  const muffle = ctx.createBiquadFilter();
-  muffle.type = 'lowpass'; muffle.Q.value = 0.5;
+  // 最後一道限幅:雷聲峰值很高,壓縮器(knee 寬、ratio 4)攔不住
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6; limiter.knee.value = 0; limiter.ratio.value = 20;
+  limiter.attack.value = 0.001; limiter.release.value = 0.15;   // 起音仍會衝過門檻約 3 dB,留餘裕
+  master.connect(comp).connect(limiter).connect(ctx.destination);
+  const lowpass = () => {
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass'; f.Q.value = 0.5;
+    return f;
+  };
+  const muffle = lowpass();
   const outside = ctx.createGain();
   outside.connect(muffle).connect(master);
+  const thunderMuffle = lowpass();
+  const thunder = ctx.createGain();
+  thunder.connect(thunderMuffle).connect(master);
   const inside = ctx.createGain();
   inside.gain.value = 0;
   inside.connect(master);
-  return { master, muffle, outside, inside };
+  return { master, limiter, muffle, outside, thunderMuffle, thunder, inside };
 }
 
 /**
@@ -136,7 +149,7 @@ export function createStormAudio({ wind }) {
   function strike({ x, y, z, power }) {
     if (!running()) return;
     const d = Math.hypot(x - listener.x, y - listener.y, z - listener.z);
-    playThunder(ctx, graph.outside, buffers, thunderProfile(d, power));
+    playThunder(ctx, graph.thunder, buffers, thunderProfile(d, power));
   }
 
   /**
@@ -166,8 +179,9 @@ export function createStormAudio({ wind }) {
 
     const mix = cabinMix(inside);
     graph.muffle.frequency.setTargetAtTime(mix.muffle, now, SMOOTH);
-    graph.outside.gain.setTargetAtTime(mix.outside, now, SMOOTH);
-    graph.inside.gain.setTargetAtTime(mix.inside, now, SMOOTH);
+    graph.thunderMuffle.frequency.setTargetAtTime(mix.thunderMuffle, now, SMOOTH);
+    graph.outside.gain.setTargetAtTime(mix.outside * AMBIENT_LEVEL, now, SMOOTH);
+    graph.inside.gain.setTargetAtTime(mix.inside * AMBIENT_LEVEL, now, SMOOTH);
   }
 
   return {
