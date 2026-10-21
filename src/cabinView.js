@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { exteriorPose } from './camera.js';
 import { createCabinHud } from './ui/cabinHud.js';
 import { createLookAround } from './lookAround.js';
+import { createWheelZoom, liftAboveSea } from './cameraZoom.js';
 
 export const STATIONS = [
   { key: 'helm', label: '駕駛座', pos: [-2.74, 2.52, 0], look: [-1.0, 2.04, 0] },
@@ -62,7 +63,11 @@ function bindInput({ dom, pointer, hud, pick, actions }) {
   });
 }
 
-export function createCabinView({ camera, boat, wheelhouse, cabin, dom }) {
+/**
+ * @param {{ camera: THREE.PerspectiveCamera, boat: THREE.Object3D, wheelhouse: object, cabin: object,
+ *           dom: HTMLElement, seaHeight: (x: number, z: number, t: number) => number }} opts
+ */
+export function createCabinView({ camera, boat, wheelhouse, cabin, dom, seaHeight }) {
   const state = { mode: 'outside', u: 0, station: 0, from: null, to: null, curves: null, reveal: 0, revealFrom: 1 };
   const pointer = { x: 0, y: 0, fresh: false };
   const ext = { pos: new THREE.Vector3(), look: new THREE.Vector3() };   // 外部鏡頭(船身座標),每幀更新
@@ -74,6 +79,7 @@ export function createCabinView({ camera, boat, wheelhouse, cabin, dom }) {
 
   const hud = createCabinHud({ stations: STATIONS, onStation: (i) => goStation(i), onExit: () => exit() });
   const lookAround = createLookAround(dom, () => state.mode === 'inside' || state.mode === 'moving');
+  const zoom = createWheelZoom(dom, () => state.mode === 'outside');
   let lookHintShown = false;
 
   function pick(clientX, clientY) {
@@ -181,7 +187,8 @@ export function createCabinView({ camera, boat, wheelhouse, cabin, dom }) {
 
   function update(t, dt, heaveX) {
     boat.updateMatrixWorld();
-    const p = exteriorPose(t, heaveX);
+    const p = exteriorPose(t, heaveX, zoom.update(dt));
+    p.pos.y = liftAboveSea(p.pos.y, seaHeight(p.pos.x, p.pos.z, t));
     ext.pos.copy(boat.worldToLocal(p.pos));
     ext.look.copy(boat.worldToLocal(p.look));
 

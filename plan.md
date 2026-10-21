@@ -13,12 +13,16 @@ ship/
 ├── src/
 │   ├── main.js            場景組裝 + 主渲染迴圈
 │   ├── camera.js           攝影機跟拍
+│   ├── cameraZoom.js       外部鏡頭滾輪 / 觸控板捏合縮放(指數縮放、上下限、不鑽進浪裡)
 │   ├── physics/
 │   │   ├── waves.js         3 道 Gerstner 長湧浪(船的浮力只跟這部分)、漂移、CPU 端反向迭代取樣
 │   │   ├── spectrum.js      JONSWAP 頻譜 + 方向分布 → 初始頻譜 h0(k)
 │   │   ├── fftSampler.js    FFT 海面的 CPU 鏡像(波長 > 10m 的成分),給浮力用
 │   │   ├── floater.js        彈簧阻尼浮力 + 船頭入水深度/速度(驅動艏浪與水花)
-│   │   └── whitecap.js       Monahan 白頭浪覆蓋率(依風速)+ 白沫門檻回授控制器
+│   │   ├── whitecap.js       Monahan 白頭浪覆蓋率(依風速)+ 白沫門檻回授控制器
+│   │   ├── wind.js           海面風:冪次律剖面(α=0.11)、海上陣風係數 1.23 → 紊流強度 7.7%、Kolmogorov 凍結紊流
+│   │   ├── flagAero.js       旗布材料數據(濕尼龍、暴雨)、平板法向壓力 + 紊流摩擦、拍動壓力波(風洞實驗 St_L/A/L 校準)
+│   │   └── flagCloth.js      XPBD 旗布(多子步)、旗桿碰撞、掛點跟著船的姿態
 │   └── scene/
 │       ├── lights.js         低角度月光、半球環境光、閃電方向光
 │       ├── sky.js            暴風雲天空(雲隙月亮、閃電打亮雲層),同時當環境貼圖
@@ -48,16 +52,21 @@ ship/
 │       │   ├── hull.js        放樣船殼、艉板、木甲板、舷牆壓條、護舷條、輪胎護舷
 │       │   ├── wheelhouse.js  居住艙 + 外傾前窗駕駛台、舷窗、雷達、天線、煙囪、救生筏、舷燈
 │       │   ├── rigging.js     前桅、桅燈(拖網作業綠/白燈)、甲板工作燈、吊桿、支索
+│       │   ├── flagStaff.js   船尾旗桿、旗子尺寸與掛點
 │       │   ├── deckGear.js    龍門吊架、網板、拖網絞機、魚艙口、漁網、魚箱、錨機、繫纜樁
 │       │   ├── materials.js   濕表面材質
 │       │   ├── textures.js    程序化貼圖(船殼漆面/鏽痕/船籍號、甲板木紋、窗光)
 │       │   └── parts.js       建模小工具(rod / tube / roundedBox)
+│       ├── flag/
+│       │   ├── index.js       船尾「洋流」旗:布料網格、濕布材質(單層印刷,背面是反向圖案)
+│       │   └── droplets.js    旗尾甩出的水滴(雨水通量決定水量、表面張力決定脫離加速度)
 │       ├── spray.js           船頭破浪水花(持續甩水 + 拍擊爆發 + 水霧,視風吹向船尾)
 │       ├── spindrift.js       遠處浪峰水霧:GPU 無狀態粒子,只在有破浪白水的浪峰顯示,往下風吹
 │       ├── sprayPoints.js     水花/水霧共用點精靈(距離縮放、閃電打亮、指數平方霧;CPU 與 GPU 粒子共用)
 │       ├── rain.js            雨滴粒子
 │       └── lightning.js       閃電(分岔 + 連閃)→ 輸出 flash 強度/方向
 ├── storm-night-water-official.html   舊版單檔(保留備查,不再維護)
+├── src/assets/           圖檔(flag-yangliu.webp:旗面圖案)
 ├── tests/                node --test 單元測試(npm test)
 └── package.json
 ```

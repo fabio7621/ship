@@ -7,6 +7,7 @@ import { buildHull } from './hull.js';
 import { buildWheelhouse } from './wheelhouse.js';
 import { buildRigging } from './rigging.js';
 import { buildDeckGear } from './deckGear.js';
+import { buildFlagStaff } from './flagStaff.js';
 import { mesh } from '../parts.js';
 import { buildHullClipTexture, HULL_CLIP_RANGE } from './hullClip.js';
 import { railY, stationX, heightParam } from './hullProfile.js';
@@ -25,7 +26,7 @@ export function createBoat(scene) {
   const wheelhouse = buildWheelhouse(mats);
   const rigging = buildRigging(mats);
 
-  boat.add(buildHull(mats), wheelhouse.group, rigging.group, buildDeckGear(mats), sternLight(mats));
+  boat.add(buildHull(mats), wheelhouse.group, rigging.group, buildDeckGear(mats), buildFlagStaff(mats), sternLight(mats));
   scene.add(boat);
 
   const { cabinLight } = wheelhouse;

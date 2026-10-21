@@ -13,6 +13,7 @@ import { createPost } from './scene/post.js';
 import { createFloater, updateFloater, bowWaveStrength } from './physics/floater.js';
 import { createCabin } from './scene/cabin/index.js';
 import { createCabinView } from './cabinView.js';
+import { createFlag } from './scene/flag/index.js';
 
 /* =========================================================
    場景基礎
@@ -42,6 +43,7 @@ const spindrift = createSpindrift(scene, {
   fogDensity: FOG_DENSITY, surfaceTextures: ocean.surfaceTextures
 });
 const rain = createRain(scene);
+const flag = createFlag(scene, { boat, renderer, fogDensity: FOG_DENSITY });
 const lightning = createLightning(scene, boltLight);
 const floater = createFloater();
 const post = createPost(renderer, scene, camera);
@@ -53,7 +55,7 @@ scene.environment = new THREE.PMREMGenerator(renderer).fromScene(envScene, 0.04,
 
 // 駕駛艙內部:場景其他東西都建好後才建立(它會預先編譯「多一盞艙內燈」版本的 shader)
 const cabin = createCabin({ boat, wheelhouse, rainMaterial: rain.material, scene, renderer, camera });
-const cabinView = createCabinView({ camera, boat, wheelhouse, cabin, dom: renderer.domElement });
+const cabinView = createCabinView({ camera, boat, wheelhouse, cabin, dom: renderer.domElement, seaHeight: ocean.heightAt });
 
 function resize() {
   const dpr = renderer.getPixelRatio();
@@ -64,6 +66,7 @@ function resize() {
   ocean.setSize(innerWidth * dpr, innerHeight * dpr);
   spray.setSize(innerHeight * dpr, camera.fov);
   spindrift.setSize(innerHeight * dpr, camera.fov);
+  flag.setSize(innerHeight * dpr, camera.fov);
 }
 resize();
 window.addEventListener('resize', resize);
@@ -82,6 +85,7 @@ function frame() {
   lightning.update(t, dt);
   const { flash, dir: flashDir } = lightning.state;
   cabin.update(t, dt, floater, flash);
+  flag.update(t, dt, flash);
   sky.update(t, flash, flashDir);
   ocean.update(t, dt, boat, waterLamps, flash, flashDir, bowWaveStrength(floater));
   spray.update(dt, t, boat, floater, flash);
@@ -92,4 +96,4 @@ function frame() {
 frame();
 
 // 除錯:網址加 ?debug 可在 console 用 __storm.ocean.foamInfo() 看白沫覆蓋率
-if (new URLSearchParams(location.search).has('debug')) window.__storm = { ocean, scene, camera, boat, cabin, cabinView, renderer };
+if (new URLSearchParams(location.search).has('debug')) window.__storm = { ocean, scene, camera, boat, cabin, cabinView, renderer, flag };
