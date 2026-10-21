@@ -36,5 +36,5 @@ export function createBoat(scene) {
     cabinLight.intensity = CABIN_INTENSITY * (0.85 + 0.10 * Math.sin(t * 9.3) + 0.05 * Math.sin(t * 23.7));
   }
 
-  return { boat, lamps, update, hullClip: { texture: buildHullClipTexture(), range: HULL_CLIP_RANGE } };
+  return { boat, lamps, wheelhouse, update, hullClip: { texture: buildHullClipTexture(), range: HULL_CLIP_RANGE } };
 }

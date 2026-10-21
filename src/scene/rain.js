@@ -14,9 +14,10 @@ export function createRain(scene) {
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  scene.add(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+  const material = new THREE.LineBasicMaterial({
     color: 0x9db4cf, transparent: true, opacity: 0.28, depthWrite: false
-  })));
+  });
+  scene.add(new THREE.LineSegments(geo, material));
 
   function update(dt) {
     for (let i = 0; i < RAIN_N; i++) {
@@ -29,5 +30,5 @@ export function createRain(scene) {
     geo.attributes.position.needsUpdate = true;
   }
 
-  return { update };
+  return { update, material };
 }

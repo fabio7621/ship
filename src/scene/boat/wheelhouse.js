@@ -1,57 +1,106 @@
 /* =========================================================
    上層建築:下層居住艙 + 駕駛台(前窗外傾,北海漁船的標誌)
+   駕駛台是「有窗洞的薄牆」:平常窗洞被亮窗貼片蓋住,進艙過場時貼片淡出才看得到艙內
    ========================================================= */
 import * as THREE from 'three';
 import { mesh, roundedBox, rod, polyRod, drumZ } from '../parts.js';
+import {
+  LOWER, BRIDGE, ROOF_Y, RAKE, WALL, WINDOW_Y, OUTER, HOLE_INSET,
+  FRONT_WINDOWS, SIDE_WINDOWS, REAR_WINDOWS, frontOuterX
+} from '../cabin/layout.js';
 
 const BASE_Y = 0.6;           // 埋進甲板一點,避免舷弧造成縫隙
-const LOWER = { x0: -4.25, x1: -1.3, top: 1.85, halfW: 1.2 };
-const BRIDGE = { rear: -3.55, front: -1.55, rake: 0.25, h: 1.15, halfW: 1.1, bevel: 0.04 };
-const ROOF_Y = LOWER.top + BRIDGE.h + 0.13;
-const RAKE = Math.atan(BRIDGE.rake / BRIDGE.h);
+const EDGE = 0.012;           // 牆板倒角
 
-function bridgeShell(mat) {
-  const s = new THREE.Shape();
-  s.moveTo(BRIDGE.rear, 0);
-  s.lineTo(BRIDGE.front, 0);
-  s.lineTo(BRIDGE.front + BRIDGE.rake, BRIDGE.h);
-  s.lineTo(BRIDGE.rear, BRIDGE.h);
-  s.closePath();
-  const depth = BRIDGE.halfW * 2 - BRIDGE.bevel * 2;
+function rectPath(cx, cy, w, h) {
+  const p = new THREE.Path();
+  p.moveTo(cx - w / 2, cy - h / 2);
+  p.lineTo(cx + w / 2, cy - h / 2);
+  p.lineTo(cx + w / 2, cy + h / 2);
+  p.lineTo(cx - w / 2, cy + h / 2);
+  p.closePath();
+  return p;
+}
+
+/**
+ * 一片有窗洞的牆:shape 畫在 (X, Y) 平面,往 Z 擠出 WALL 厚(Z 指向艙內)
+ * @param {THREE.Vector3[]} basis [X, Y, Z] 在船身座標的方向
+ */
+function wallPanel(outline, holes, mat, basis, origin) {
+  const s = new THREE.Shape(outline.map(([x, y]) => new THREE.Vector2(x, y)));
+  s.holes = holes.map(([cx, cy, w, h]) => rectPath(cx, cy, w, h));
   const geo = new THREE.ExtrudeGeometry(s, {
-    depth, bevelEnabled: true, bevelThickness: BRIDGE.bevel, bevelSize: BRIDGE.bevel, bevelSegments: 3
+    depth: WALL - EDGE * 2, bevelEnabled: true,
+    bevelThickness: EDGE, bevelSize: EDGE, bevelOffset: -EDGE, bevelSegments: 2
   });
-  geo.translate(0, LOWER.top, -depth / 2);
+  geo.translate(0, 0, EDGE);
+  geo.applyMatrix4(new THREE.Matrix4().makeBasis(...basis).setPosition(origin));
   return new THREE.Mesh(geo, mat);
 }
 
-/* 前窗:放在外傾的斜面上 */
-function frontWindows(mats) {
+function bridgeShell(mat) {
   const g = new THREE.Group();
-  const yc = LOWER.top + 0.66;
-  const t = (yc - LOWER.top) / BRIDGE.h;
-  g.position.set(BRIDGE.front + BRIDGE.rake * t + BRIDGE.bevel / Math.cos(RAKE) + 0.008, yc, 0);
+  const { rear, halfW, bottom, top } = OUTER;
+  const xf0 = frontOuterX(bottom), xf1 = frontOuterX(top);
+  const cosR = Math.cos(RAKE), sinR = Math.sin(RAKE);
+  const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0);
+
+  // 左右舷牆:basis 要維持右手系(不然面會翻過來被剔除),右舷的 shape x 因此是 -x
+  for (const side of [1, -1]) {
+    const flip = -side;
+    const outline = [[rear, bottom], [xf0, bottom], [xf1, top], [rear, top]].map(([x, y]) => [x * flip, y]);
+    const holes = SIDE_WINDOWS.x.map((x) => [x * flip, WINDOW_Y, SIDE_WINDOWS.w - HOLE_INSET * 2, SIDE_WINDOWS.h - HOLE_INSET * 2]);
+    const basis = [new THREE.Vector3(flip, 0, 0), Y, new THREE.Vector3(0, 0, -side)];
+    g.add(wallPanel(outline, holes, mat, basis, new THREE.Vector3(0, 0, side * halfW)));
+  }
+
+  // 外傾前牆:shape 的 x = 船身 z、y = 沿斜面往上的距離
+  const slopeLen = (top - bottom) / cosR;
+  const frontHoles = FRONT_WINDOWS.z.map((z) => [
+    z, (WINDOW_Y - bottom) / cosR, FRONT_WINDOWS.w - HOLE_INSET * 2, FRONT_WINDOWS.h / cosR - HOLE_INSET * 2
+  ]);
+  g.add(wallPanel([[-halfW, 0], [halfW, 0], [halfW, slopeLen], [-halfW, slopeLen]], frontHoles, mat,
+    [new THREE.Vector3(0, 0, 1), new THREE.Vector3(sinR, cosR, 0), new THREE.Vector3(-cosR, sinR, 0)],
+    new THREE.Vector3(xf0, bottom, 0)));
+
+  // 後牆:shape 的 x = 船身 -z
+  const rearHoles = REAR_WINDOWS.z.map((z) => [-z, REAR_WINDOWS.y, REAR_WINDOWS.w - HOLE_INSET * 2, REAR_WINDOWS.h - HOLE_INSET * 2]);
+  g.add(wallPanel([[-halfW, bottom], [halfW, bottom], [halfW, top], [-halfW, top]], rearHoles, mat,
+    [new THREE.Vector3(0, 0, -1), Y, X], new THREE.Vector3(rear, 0, 0)));
+  return g;
+}
+
+/* 駕駛台窗片:亮窗貼圖。另外 clone 一份材質,進艙過場時才能單獨淡出 */
+function bridgeGlass(mats) {
+  const fade = (m) => Object.assign(m.clone(), { transparent: true, depthWrite: true });
+  return { lit: fade(mats.glassLit), dim: fade(mats.glassDim) };
+}
+
+/* 前窗:放在外傾的斜面上 */
+function frontWindows(glass) {
+  const g = new THREE.Group();
+  g.position.set(frontOuterX(WINDOW_Y) + 0.008, WINDOW_Y, 0);
   g.rotation.z = -RAKE;
-  for (const z of [-0.84, -0.42, 0, 0.42, 0.84]) {
-    const pane = mesh(new THREE.PlaneGeometry(0.36, 0.56 / Math.cos(RAKE)), mats.glassLit, 0, 0, z);
+  for (const z of FRONT_WINDOWS.z) {
+    const pane = mesh(new THREE.PlaneGeometry(FRONT_WINDOWS.w, FRONT_WINDOWS.h / Math.cos(RAKE)), glass.lit, 0, 0, z);
     pane.rotation.y = Math.PI / 2;
     g.add(pane);
   }
   return g;
 }
 
-function sideWindows(mats) {
+function sideWindows(glass) {
   const g = new THREE.Group();
-  const zFace = BRIDGE.halfW + 0.008;
+  const zFace = OUTER.halfW + 0.008;
   for (const side of [1, -1]) {
-    for (const x of [-3.15, -2.6, -2.05]) {
-      const pane = mesh(new THREE.PlaneGeometry(0.42, 0.5), mats.glassLit, x, LOWER.top + 0.66, side * zFace);
+    for (const x of SIDE_WINDOWS.x) {
+      const pane = mesh(new THREE.PlaneGeometry(SIDE_WINDOWS.w, SIDE_WINDOWS.h), glass.lit, x, WINDOW_Y, side * zFace);
       if (side < 0) pane.rotation.y = Math.PI;
       g.add(pane);
     }
   }
-  for (const z of [-0.5, 0.5]) {
-    const pane = mesh(new THREE.PlaneGeometry(0.5, 0.42), mats.glassDim, BRIDGE.rear - BRIDGE.bevel - 0.008, LOWER.top + 0.7, z);
+  for (const z of REAR_WINDOWS.z) {
+    const pane = mesh(new THREE.PlaneGeometry(REAR_WINDOWS.w, REAR_WINDOWS.h), glass.dim, OUTER.rear - 0.008, REAR_WINDOWS.y, z);
     pane.rotation.y = -Math.PI / 2;
     g.add(pane);
   }
@@ -70,8 +119,10 @@ function porthole(mats, lit, x, y, z, rotY) {
 function lowerHouse(mats) {
   const g = new THREE.Group();
   const len = LOWER.x1 - LOWER.x0;
-  g.add(roundedBox(len, LOWER.top - BASE_Y, LOWER.halfW * 2, 0.06, mats.white,
-    (LOWER.x0 + LOWER.x1) / 2, (LOWER.top + BASE_Y) / 2, 0));
+  // 獨立材質:艙內模式要用 clipping 把穿進下沉艙內的那塊頂面裁掉
+  const body = roundedBox(len, LOWER.top - BASE_Y, LOWER.halfW * 2, 0.06, mats.white.clone(),
+    (LOWER.x0 + LOWER.x1) / 2, (LOWER.top + BASE_Y) / 2, 0);
+  g.add(body);
   const zf = LOWER.halfW + 0.012;
   [[-3.3, true], [-2.8, false], [-1.65, true]].forEach(([x, lit]) => {
     g.add(porthole(mats, lit, x, 1.38, zf, 0));
@@ -100,7 +151,7 @@ function lowerHouse(mats) {
   // 救生圈
   const ring = mesh(new THREE.TorusGeometry(0.26, 0.055, 12, 32), mats.ring, -3.86, 1.24, LOWER.halfW + 0.07);
   g.add(ring);
-  return g;
+  return { group: g, body };
 }
 
 function roof(mats) {
@@ -182,10 +233,12 @@ function funnelAndRaft(mats) {
 
 export function buildWheelhouse(mats) {
   const group = new THREE.Group();
-  group.add(lowerHouse(mats));
+  const lower = lowerHouse(mats);
+  const glass = bridgeGlass(mats);
+  group.add(lower.group);
   group.add(bridgeShell(mats.white));
-  group.add(frontWindows(mats));
-  group.add(sideWindows(mats));
+  group.add(frontWindows(glass));
+  group.add(sideWindows(glass));
   group.add(roof(mats));
   const gear = roofGear(mats);
   group.add(gear.group);
@@ -197,5 +250,5 @@ export function buildWheelhouse(mats) {
   cabinLight.position.set(-1.15, 2.35, 0);
   group.add(cabinLight);
 
-  return { group, cabinLight, radar: gear.scanner };
+  return { group, cabinLight, radar: gear.scanner, glass, lowerBody: lower.body };
 }

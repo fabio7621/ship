@@ -11,7 +11,8 @@ import { createRain } from './scene/rain.js';
 import { createLightning, FOG_BASE } from './scene/lightning.js';
 import { createPost } from './scene/post.js';
 import { createFloater, updateFloater, bowWaveStrength } from './physics/floater.js';
-import { updateCamera } from './camera.js';
+import { createCabin } from './scene/cabin/index.js';
+import { createCabinView } from './cabinView.js';
 
 /* =========================================================
    場景基礎
@@ -32,7 +33,7 @@ camera.layers.enable(NO_REFLECTION_LAYER);
 
 const { boltLight, moonDir, moonColor } = createLights(scene);
 const sky = createSky(scene, { moonDir });
-const { boat, lamps, hullClip, update: updateBoat } = createBoat(scene);
+const { boat, lamps, hullClip, wheelhouse, update: updateBoat } = createBoat(scene);
 const lighthouse = createLighthouse(scene);
 const ocean = createOcean(scene, renderer, { moonDir, moonColor, hullClip, shore: lighthouse.shore });
 const waterLamps = [...lamps, lighthouse.glint];
@@ -49,6 +50,10 @@ const post = createPost(renderer, scene, camera);
 const envScene = new THREE.Scene();
 envScene.add(new THREE.Mesh(sky.mesh.geometry, sky.material));
 scene.environment = new THREE.PMREMGenerator(renderer).fromScene(envScene, 0.04, 0.1, 1000).texture;
+
+// 駕駛艙內部:場景其他東西都建好後才建立(它會預先編譯「多一盞艙內燈」版本的 shader)
+const cabin = createCabin({ boat, wheelhouse, rainMaterial: rain.material, scene, renderer, camera });
+const cabinView = createCabinView({ camera, boat, wheelhouse, cabin, dom: renderer.domElement });
 
 function resize() {
   const dpr = renderer.getPixelRatio();
@@ -71,11 +76,12 @@ function frame() {
   const t = clock.elapsedTime;
 
   updateFloater(floater, boat, t, dt, ocean.heightAt);
-  updateCamera(camera, t, floater.heave.x);
+  cabinView.update(t, dt, floater.heave.x);
   updateBoat(t);
   lighthouse.update(t, camera);
   lightning.update(t, dt);
   const { flash, dir: flashDir } = lightning.state;
+  cabin.update(t, dt, floater, flash);
   sky.update(t, flash, flashDir);
   ocean.update(t, dt, boat, waterLamps, flash, flashDir, bowWaveStrength(floater));
   spray.update(dt, t, boat, floater, flash);
@@ -86,4 +92,4 @@ function frame() {
 frame();
 
 // 除錯:網址加 ?debug 可在 console 用 __storm.ocean.foamInfo() 看白沫覆蓋率
-if (new URLSearchParams(location.search).has('debug')) window.__storm = { ocean, scene };
+if (new URLSearchParams(location.search).has('debug')) window.__storm = { ocean, scene, camera, boat, cabin, cabinView, renderer };
